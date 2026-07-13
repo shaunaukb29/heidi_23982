@@ -1,0 +1,28 @@
+FROM --platform=linux/amd64 python:3.10-slim
+
+WORKDIR /app
+
+ENV CARITHM_DEVICE=cpu \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+RUN python -m pip install --upgrade pip "setuptools<81" \
+    && python -m pip install torch==1.13.1+cpu torchvision==0.14.1+cpu \
+       --extra-index-url https://download.pytorch.org/whl/cpu \
+    && python -m pip install mmcv-full==1.7.0 \
+       -f https://download.openmmlab.com/mmcv/dist/cpu/torch1.13.0/index.html \
+    && python -m pip install mmdet==2.28.2 \
+    && python -m pip install -e .
+
+COPY models ./models
+
+EXPOSE 8000
+
+CMD ["uvicorn", "carithm_inspector.main:app", "--host", "0.0.0.0", "--port", "8000"]
