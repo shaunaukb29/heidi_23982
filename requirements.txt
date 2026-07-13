@@ -1,5 +1,7 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 
+setuptools>=68
+
 -e .
 
 streamlit>=1.36
