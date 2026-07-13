@@ -126,10 +126,10 @@ if upload is not None:
         try:
             view_angle = ViewAngle(selected_angle_str)
             
-            # Pass the view_angle down to the inference/estimation pipeline
-            detections = detector().inspect(photo, view_angle=view_angle)
+            # The ML model only takes the photo to find the bounding boxes
+            detections = detector().inspect(photo)
             
-            # Assuming your estimate() function now takes view_angle as an argument to pass to locate_vehicle_part
+            # The heuristic engine takes the angle to map the location
             reports = [(detection, estimate(detection, view_angle)) for detection in detections]
             
             st.session_state.inspection = reports
