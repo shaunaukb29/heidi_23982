@@ -11,6 +11,19 @@ from .detector import DamageDetector, DetectorUnavailable, load_detector
 from .estimates import estimate
 
 
+class VehiclePartResponse(BaseModel):
+    location: str
+    panel: str
+    material: str
+
+
+class CostBreakdownResponse(BaseModel):
+    labour_usd: int
+    paint_usd: int
+    parts_usd: int
+    total_usd: int
+
+
 class EstimateResponse(BaseModel):
     low_usd: int
     high_usd: int
@@ -18,17 +31,27 @@ class EstimateResponse(BaseModel):
     driveable: bool
     safety_note: str
     common_parts: list[str]
+    severity: str
+    priority: str
+    vehicle_part: VehiclePartResponse
+    repair_steps: list[str]
+    shop_time_low_hours: float
+    shop_time_high_hours: float
+    cost_breakdown: CostBreakdownResponse
 
 
 class DamageResponse(BaseModel):
     type: str
     confidence: float
     bounding_box: list[float]
+    surface_area_pct: float
+    has_segmentation_mask: bool
     estimate: EstimateResponse
 
 
 class InspectionResponse(BaseModel):
     damages: list[DamageResponse]
+    damage_count: int
     disclaimer: str
 
 
@@ -47,7 +70,7 @@ def create_app(detector: DamageDetector | None = None) -> FastAPI:
                 app.state.detector_error = str(error)
         yield
 
-    app = FastAPI(title="Carithm Visual Inspector", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Carithm Visual Inspector", version="0.2.0", lifespan=lifespan)
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -68,18 +91,52 @@ def create_app(detector: DamageDetector | None = None) -> FastAPI:
             photo = Image.open(BytesIO(payload))
         except UnidentifiedImageError as error:
             raise HTTPException(422, "The uploaded file is not a valid image.") from error
+
         damages = []
         for detection in app.state.detector.inspect(photo):
             repair = estimate(detection)
-            damages.append(DamageResponse(
-                type=detection.damage_type,
-                confidence=round(detection.confidence, 3),
-                bounding_box=[round(value, 1) for value in detection.bbox],
-                estimate=EstimateResponse(**repair.__dict__, common_parts=list(repair.parts)),
-            ))
+            breakdown = repair.cost_breakdown
+            damages.append(
+                DamageResponse(
+                    type=detection.damage_type,
+                    confidence=round(detection.confidence, 3),
+                    bounding_box=[round(value, 1) for value in detection.bbox],
+                    surface_area_pct=round(detection.area_ratio * 100, 2),
+                    has_segmentation_mask=detection.mask is not None and detection.mask.any(),
+                    estimate=EstimateResponse(
+                        low_usd=repair.low_usd,
+                        high_usd=repair.high_usd,
+                        complexity=repair.complexity,
+                        driveable=repair.driveable,
+                        safety_note=repair.safety_note,
+                        common_parts=list(repair.parts),
+                        severity=repair.severity.value,
+                        priority=repair.priority.value,
+                        vehicle_part=VehiclePartResponse(
+                            location=repair.vehicle_part.location,
+                            panel=repair.vehicle_part.panel,
+                            material=repair.vehicle_part.material,
+                        ),
+                        repair_steps=list(repair.repair_steps),
+                        shop_time_low_hours=repair.shop_time_low_hours,
+                        shop_time_high_hours=repair.shop_time_high_hours,
+                        cost_breakdown=CostBreakdownResponse(
+                            labour_usd=breakdown.labour_usd,
+                            paint_usd=breakdown.paint_usd,
+                            parts_usd=breakdown.parts_usd,
+                            total_usd=breakdown.total_usd,
+                        ),
+                    ),
+                )
+            )
+
         return InspectionResponse(
             damages=damages,
-            disclaimer="Image-only estimate. It cannot confirm hidden, structural, or mechanical damage. Obtain an in-person inspection for safety decisions.",
+            damage_count=len(damages),
+            disclaimer=(
+                "Image-only estimate. It cannot confirm hidden, structural, or mechanical damage. "
+                "Obtain an in-person inspection for safety decisions."
+            ),
         )
 
     return app
@@ -90,4 +147,5 @@ app = create_app()
 
 def run() -> None:
     import uvicorn
+
     uvicorn.run("carithm_inspector.main:app", host="0.0.0.0", port=8000, reload=True)

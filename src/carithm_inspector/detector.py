@@ -44,7 +44,6 @@ class MMDetectionDamageDetector:
 
         self._infer = inference_detector
 
-        # Force CPU if CUDA is unavailable
         if device.startswith("cuda"):
             try:
                 import torch
@@ -63,7 +62,12 @@ class MMDetectionDamageDetector:
     def inspect(self, image: Image.Image) -> list[Detection]:
         rgb = image.convert("RGB")
         result = self._infer(self._model, np.asarray(rgb))
-        boxes_by_class = result[0] if isinstance(result, tuple) else result
+
+        if isinstance(result, tuple):
+            boxes_by_class, masks_by_class = result
+        else:
+            boxes_by_class = result
+            masks_by_class = None
 
         detections: list[Detection] = []
 
@@ -72,22 +76,30 @@ class MMDetectionDamageDetector:
             if damage_type is None:
                 continue
 
-            for x1, y1, x2, y2, score in boxes:
-                if float(score) >= 0.5:
-                    detections.append(
-                        Detection(
-                            damage_type,
-                            float(score),
-                            (
-                                float(x1),
-                                float(y1),
-                                float(x2),
-                                float(y2),
-                            ),
-                            rgb.width,
-                            rgb.height,
-                        )
+            class_masks = None
+            if masks_by_class is not None and class_index - 1 < len(masks_by_class):
+                class_masks = masks_by_class[class_index - 1]
+
+            for box_index, (x1, y1, x2, y2, score) in enumerate(boxes):
+                if float(score) < 0.5:
+                    continue
+
+                mask = None
+                if class_masks is not None and box_index < len(class_masks):
+                    raw_mask = class_masks[box_index]
+                    if raw_mask is not None:
+                        mask = np.asarray(raw_mask, dtype=bool)
+
+                detections.append(
+                    Detection(
+                        damage_type,
+                        float(score),
+                        (float(x1), float(y1), float(x2), float(y2)),
+                        rgb.width,
+                        rgb.height,
+                        mask=mask,
                     )
+                )
 
         return detections
 
@@ -98,5 +110,5 @@ def load_detector() -> DamageDetector:
     return MMDetectionDamageDetector(
         root / "dcn_plus_cfg_small.py",
         root / "checkpoint.pth",
-        os.getenv("CARITHM_DEVICE", "cpu"),  # Default to CPU
+        os.getenv("CARITHM_DEVICE", "cpu"),
     )

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from .domain import DamageType, Detection, Estimate
+from .analysis import (
+    locate_vehicle_part,
+    priority_from,
+    repair_steps_for,
+    severity_from_detection,
+    shop_time_for,
+)
+from .domain import CostBreakdown, DamageType, Detection, Estimate, Severity
 
 
 # Baselines are consumer repair ranges in USD, before visible-area adjustment.
@@ -13,18 +20,52 @@ _REPAIR_GUIDANCE: dict[DamageType, tuple[int, int, str, bool, str, tuple[str, ..
     DamageType.TIRE_FLAT: (120, 450, "medium", False, "Do not drive on a flat tire. Fit the spare or arrange recovery.", ("tire", "valve stem", "wheel repair")),
 }
 
+# Share of total repair cost by category (labour, paint, parts).
+_COST_SPLIT: dict[DamageType, tuple[float, float, float]] = {
+    DamageType.SCRATCH: (0.35, 0.55, 0.10),
+    DamageType.DENT: (0.50, 0.40, 0.10),
+    DamageType.CRACK: (0.45, 0.30, 0.25),
+    DamageType.GLASS_SHATTER: (0.30, 0.05, 0.65),
+    DamageType.LAMP_BROKEN: (0.25, 0.05, 0.70),
+    DamageType.TIRE_FLAT: (0.20, 0.00, 0.80),
+}
+
+
+def _cost_breakdown(damage_type: DamageType, total: int) -> CostBreakdown:
+    labour_pct, paint_pct, parts_pct = _COST_SPLIT[damage_type]
+    labour = round(total * labour_pct / 10) * 10
+    paint = round(total * paint_pct / 10) * 10
+    parts = max(0, total - labour - paint)
+    return CostBreakdown(labour_usd=labour, paint_usd=paint, parts_usd=parts)
+
 
 def estimate(detection: Detection) -> Estimate:
-    """Return a cautious, visible-damage-only repair range for one detection."""
+    """Return a detailed repair estimate for one detection."""
     low, high, complexity, driveable, note, parts = _REPAIR_GUIDANCE[detection.damage_type]
-    # Very small boxes are often chips, while a large box tends to require more prep or replacement.
-    severity = 0.7 + min(detection.area_ratio / 0.08, 1.0) * 0.5
-    confidence = 0.85 + min(max(detection.confidence, 0.0), 1.0) * 0.15
+    severity = severity_from_detection(detection)
+    area_factor = 0.7 + min(detection.area_ratio / 0.08, 1.0) * 0.5
+    confidence_factor = 0.85 + min(max(detection.confidence, 0.0), 1.0) * 0.15
+    severity_multiplier = {Severity.MINOR: 0.85, Severity.MODERATE: 1.0, Severity.SEVERE: 1.25}[severity]
+
+    low_usd = round(low * area_factor * confidence_factor * severity_multiplier / 10) * 10
+    high_usd = round(high * area_factor * confidence_factor * severity_multiplier / 10) * 10
+    mid_total = (low_usd + high_usd) // 2
+
+    priority = priority_from(detection, severity, driveable)
+    shop_low, shop_high = shop_time_for(detection.damage_type, severity)
+
     return Estimate(
-        low_usd=round(low * severity * confidence / 10) * 10,
-        high_usd=round(high * severity * confidence / 10) * 10,
+        low_usd=low_usd,
+        high_usd=high_usd,
         complexity=complexity,
         driveable=driveable,
         safety_note=note,
         parts=parts,
+        severity=severity,
+        priority=priority,
+        vehicle_part=locate_vehicle_part(detection),
+        repair_steps=repair_steps_for(detection.damage_type, severity),
+        shop_time_low_hours=shop_low,
+        shop_time_high_hours=shop_high,
+        cost_breakdown=_cost_breakdown(detection.damage_type, mid_total),
     )
