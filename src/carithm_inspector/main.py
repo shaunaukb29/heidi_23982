@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from .detector import DamageDetector, DetectorUnavailable, load_detector
 from .estimates import estimate
+from .temporary_models import HeuristicOrientationModel, NullPartSegmenter
 
 
 class VehiclePartResponse(BaseModel):
@@ -68,6 +69,12 @@ def create_app(detector: DamageDetector | None = None) -> FastAPI:
             except DetectorUnavailable as error:
                 app.state.detector = None
                 app.state.detector_error = str(error)
+
+        # Temporary stand-ins until trained OrientationModel / PartSegmenter
+        # heads exist. NullPartSegmenter -> estimate() takes the legacy
+        # bbox-heuristic fallback path automatically (see part_mapping.py).
+        app.state.orientation_model = HeuristicOrientationModel()
+        app.state.part_segmenter = NullPartSegmenter()
         yield
 
     app = FastAPI(title="Carithm Visual Inspector", version="0.2.0", lifespan=lifespan)
@@ -92,9 +99,12 @@ def create_app(detector: DamageDetector | None = None) -> FastAPI:
         except UnidentifiedImageError as error:
             raise HTTPException(422, "The uploaded file is not a valid image.") from error
 
+        view_angle = app.state.orientation_model.predict(photo)
+        part_mask = app.state.part_segmenter.predict(photo)
+
         damages = []
         for detection in app.state.detector.inspect(photo):
-            repair = estimate(detection)
+            repair = estimate(detection, view_angle, part_mask)
             breakdown = repair.cost_breakdown
             damages.append(
                 DamageResponse(
@@ -104,8 +114,8 @@ def create_app(detector: DamageDetector | None = None) -> FastAPI:
                     surface_area_pct=round(detection.area_ratio * 100, 2),
                     has_segmentation_mask=detection.mask is not None and detection.mask.any(),
                     estimate=EstimateResponse(
-                        low_usd=repair.low_usd,
-                        high_usd=repair.high_usd,
+                        low_usd=int(repair.low_cost),
+                        high_usd=int(repair.high_cost),
                         complexity=repair.complexity,
                         driveable=repair.driveable,
                         safety_note=repair.safety_note,
@@ -121,10 +131,10 @@ def create_app(detector: DamageDetector | None = None) -> FastAPI:
                         shop_time_low_hours=repair.shop_time_low_hours,
                         shop_time_high_hours=repair.shop_time_high_hours,
                         cost_breakdown=CostBreakdownResponse(
-                            labour_usd=breakdown.labour_usd,
-                            paint_usd=breakdown.paint_usd,
-                            parts_usd=breakdown.parts_usd,
-                            total_usd=breakdown.total_usd,
+                            labour_usd=int(breakdown.labour_cost),
+                            paint_usd=int(breakdown.paint_cost),
+                            parts_usd=int(breakdown.parts_cost),
+                            total_usd=int(breakdown.total_cost),
                         ),
                     ),
                 )
