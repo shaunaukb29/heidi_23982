@@ -213,13 +213,25 @@ def locate_vehicle_part_legacy(
     damage = detection.damage_type
 
     zone = _horizontal_zone(cx)
-    if view_angle == ViewAngle.RIGHT_SIDE:
+    if view_angle == ViewAngle.FRONT:
+        # A straight-on front shot: the whole frame is the front of the
+        # car, regardless of where the damage sits left-to-right.
+        is_front_zone = True
+        is_rear_zone = False
+    elif view_angle == ViewAngle.REAR:
+        # Mirrored: a straight-on rear shot is entirely the rear of the
+        # car. (Previously FRONT/REAR fell through to the left/right-zone
+        # guess meant for side-profile shots, silently ignoring the
+        # user's selection.)
+        is_front_zone = False
+        is_rear_zone = True
+    elif view_angle == ViewAngle.RIGHT_SIDE:
         is_front_zone = "Right" in zone
         is_rear_zone = "Left" in zone
     elif view_angle == ViewAngle.LEFT_SIDE:
         is_front_zone = "Left" in zone
         is_rear_zone = "Right" in zone
-    else:
+    else:  # UNKNOWN — genuinely ambiguous, keep the existing best-effort guess
         is_front_zone = "Left" in zone
         is_rear_zone = "Right" in zone
 
