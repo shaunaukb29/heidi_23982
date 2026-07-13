@@ -15,7 +15,7 @@ carithm-inspector
 
 Set `CARITHM_MODEL_DIR` if the config and checkpoint live elsewhere. Set `CARITHM_DEVICE=cpu` for CPU inference.
 
-The compatible configuration is included in `models/dcn_plus_cfg_small.py`. The 490 MB checkpoint is intentionally ignored by Git and must be provided locally as `models/checkpoint.pth`. Until it is present, `/health` returns `degraded` and the inspection endpoint returns `503`; it never returns invented detections.
+The compatible configuration is included in `models/dcn_plus_cfg_small.py`. The 490 MB checkpoint is stored with Git LFS as `models/checkpoint.pth`; run `git lfs pull` after cloning if it is not present. Until it is present, `/health` returns `degraded` and the inspection endpoint returns `503`; it never returns invented detections.
 
 ## API
 
