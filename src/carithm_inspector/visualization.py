@@ -8,6 +8,15 @@ from PIL import Image, ImageDraw
 from .domain import DamageType, Detection, Priority, Severity
 
 
+DAMAGE_ICONS: dict[DamageType, str] = {
+    DamageType.SCRATCH: "🟡",
+    DamageType.DENT: "🟠",
+    DamageType.CRACK: "🔴",
+    DamageType.GLASS_SHATTER: "🟣",
+    DamageType.LAMP_BROKEN: "🟠",
+    DamageType.TIRE_FLAT: "🟢",
+}
+
 DAMAGE_COLORS: dict[DamageType, tuple[int, int, int]] = {
     DamageType.SCRATCH: (255, 193, 7),
     DamageType.DENT: (33, 150, 243),
@@ -39,8 +48,9 @@ class OverlayStyle:
 
 
 def _damage_label(detection: Detection, index: int) -> str:
+    icon = DAMAGE_ICONS[detection.damage_type]
     name = detection.damage_type.replace("_", " ").title()
-    return f"#{index + 1} {name} {detection.confidence:.0%}"
+    return f"{icon} {name} {detection.confidence:.0%}"
 
 
 def render_inspection_overlay(
