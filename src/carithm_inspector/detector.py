@@ -36,7 +36,7 @@ class MMDetectionDamageDetector:
         try:
             from mmdet.apis import inference_detector, init_detector
         except ImportError as error:
-            raise DetectorUnavailable("Install the detector extra to enable MMDetection inference.") from error
+            raise DetectorUnavailable(f"MMDetection could not import: {error}") from error
         self._infer = inference_detector
         self._model = init_detector(str(config_path), str(checkpoint_path), device=device)
 
