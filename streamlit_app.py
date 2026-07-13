@@ -21,9 +21,9 @@ st.markdown(
     """
     <style>
     .damage-card { padding: 0.5rem 0; border-radius: 8px; }
-    .damage-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.25rem; color: #1E3A8A; }
+    .damage-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.25rem; color: #4da6ff; }
     .muted { color: #666; font-size: 0.9rem; }
-    .stRadio [role=radiogroup] { padding: 10px; background-color: #f8f9fa; border-radius: 8px; }
+    .stRadio [role=radiogroup] { padding: 10px; border-radius: 8px; }
     </style>
     """,
     unsafe_allow_html=True,
