@@ -6,7 +6,7 @@ import streamlit as st
 from PIL import Image
 
 from carithm_inspector.detector import DetectorUnavailable, load_detector
-from carithm_inspector.domain import Detection, Estimate, Priority, Severity
+from carithm_inspector.domain import Detection, Estimate, Priority, Severity, ViewAngle
 from carithm_inspector.estimates import estimate
 from carithm_inspector.visualization import (
     PRIORITY_LABELS,
@@ -15,22 +15,22 @@ from carithm_inspector.visualization import (
     render_inspection_overlay,
 )
 
-
 st.set_page_config(page_title="Carithm Inspector", page_icon="🚗", layout="wide")
 
 st.markdown(
     """
     <style>
-    .damage-card { padding: 0.5rem 0; }
-    .damage-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.25rem; }
+    .damage-card { padding: 0.5rem 0; border-radius: 8px; }
+    .damage-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.25rem; color: #1E3A8A; }
     .muted { color: #666; font-size: 0.9rem; }
+    .stRadio [role=radiogroup] { padding: 10px; background-color: #f8f9fa; border-radius: 8px; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 st.title("Carithm Visual Inspector")
-st.caption("Upload a clear photo of visible vehicle damage for a professional inspection report.")
+st.caption("Upload a clear photo and specify the camera angle for a professional inspection report.")
 
 
 @st.cache_resource(show_spinner="Loading the damage detector…")
@@ -55,6 +55,9 @@ def _render_damage_card(
     *,
     selected: bool,
 ) -> None:
+    # Use the dynamic currency from the domain model
+    currency = repair.cost_breakdown.currency
+
     with st.container(border=True):
         st.markdown(
             f'<div class="damage-title">{"✓ " if selected else ""}'
@@ -75,7 +78,7 @@ def _render_damage_card(
             st.markdown(f"✔ {step}")
 
         st.markdown("**Estimated shop time**")
-        st.write(f"{repair.shop_time_low_hours:.0f}–{repair.shop_time_high_hours:.0f} hours")
+        st.write(f"{repair.shop_time_low_hours:.1f} – {repair.shop_time_high_hours:.1f} hours")
 
         st.markdown("**Priority**")
         _priority_block(repair.priority)
@@ -83,11 +86,14 @@ def _render_damage_card(
         st.markdown("**Cost breakdown**")
         breakdown = repair.cost_breakdown
         col1, col2 = st.columns(2)
-        col1.write(f"Labour: **${breakdown.labour_usd:,}**")
-        col1.write(f"Paint: **${breakdown.paint_usd:,}**")
-        col2.write(f"Parts: **${breakdown.parts_usd:,}**")
-        col2.write(f"**Total: ${breakdown.total_usd:,}**")
-        st.caption(f"Range: ${repair.low_usd:,}–${repair.high_usd:,}")
+        
+        # Updated to use the new domain.py attributes and dynamic currency
+        col1.write(f"Labour: **{breakdown.labour_cost:,.0f} {currency}**")
+        col1.write(f"Paint: **{breakdown.paint_cost:,.0f} {currency}**")
+        col2.write(f"Parts: **{breakdown.parts_cost:,.0f} {currency}**")
+        col2.write(f"**Total: {breakdown.total_cost:,.0f} {currency}**")
+        
+        st.caption(f"Range: {repair.low_cost:,.0f}–{repair.high_cost:,.0f} {currency}")
 
         if not repair.driveable:
             st.error(repair.safety_note)
@@ -102,6 +108,15 @@ upload = st.file_uploader("Vehicle photo", type=["jpg", "jpeg", "png", "webp"])
 if upload is not None:
     photo = Image.open(BytesIO(upload.getvalue())).convert("RGB")
 
+    # Inject the crucial ViewAngle selector before running inference
+    st.markdown("### Camera Perspective")
+    selected_angle_str = st.radio(
+        "Which side of the vehicle is shown in this photo?",
+        options=[v.value for v in ViewAngle],
+        horizontal=True,
+        index=4 # Defaults to Unknown
+    )
+    
     if "inspection" not in st.session_state or st.session_state.get("upload_name") != upload.name:
         st.session_state.upload_name = upload.name
         st.session_state.inspection = None
@@ -109,8 +124,14 @@ if upload is not None:
 
     if st.button("Run professional inspection", type="primary"):
         try:
-            detections = detector().inspect(photo)
-            reports = [(detection, estimate(detection)) for detection in detections]
+            view_angle = ViewAngle(selected_angle_str)
+            
+            # Pass the view_angle down to the inference/estimation pipeline
+            detections = detector().inspect(photo, view_angle=view_angle)
+            
+            # Assuming your estimate() function now takes view_angle as an argument to pass to locate_vehicle_part
+            reports = [(detection, estimate(detection, view_angle)) for detection in detections]
+            
             st.session_state.inspection = reports
             st.session_state.selected_damage = 0
         except DetectorUnavailable as error:
