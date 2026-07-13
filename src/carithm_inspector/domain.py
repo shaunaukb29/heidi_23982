@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 
 
-class DamageType(StrEnum):
+class DamageType(str, Enum):
     DENT = "dent"
     SCRATCH = "scratch"
     CRACK = "crack"
