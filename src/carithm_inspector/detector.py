@@ -104,11 +104,71 @@ class MMDetectionDamageDetector:
         return detections
 
 
+class UltralyticsDamageDetector:
+    """Adapter for a YOLO model trained on the six CarDD damage classes."""
+
+    label_aliases = {
+        "dent": DamageType.DENT, "scratch": DamageType.SCRATCH, "crack": DamageType.CRACK,
+        "glass shatter": DamageType.GLASS_SHATTER, "glass_shatter": DamageType.GLASS_SHATTER,
+        "shattered glass": DamageType.GLASS_SHATTER, "lamp broken": DamageType.LAMP_BROKEN,
+        "lamp_broken": DamageType.LAMP_BROKEN, "broken lamp": DamageType.LAMP_BROKEN,
+        "tire flat": DamageType.TIRE_FLAT, "tire_flat": DamageType.TIRE_FLAT,
+        "flat tire": DamageType.TIRE_FLAT,
+    }
+
+    def __init__(self, model_path: Path, device: str) -> None:
+        if not model_path.is_file():
+            raise DetectorUnavailable(
+                f"YOLO damage-model weights are missing at {model_path}. Add a CarDD-trained .pt file there."
+            )
+        try:
+            from ultralytics import YOLO
+        except ImportError as error:
+            raise DetectorUnavailable("Install the Ultralytics detector dependency.") from error
+        self._model = YOLO(str(model_path))
+        self._device = device
+
+    def inspect(self, image: Image.Image) -> list[Detection]:
+        rgb = image.convert("RGB")
+        result = self._model.predict(np.asarray(rgb), device=self._device, verbose=False)[0]
+        if result.boxes is None:
+            return []
+        masks = result.masks.data.cpu().numpy() if result.masks is not None else None
+        detections: list[Detection] = []
+        for index, box in enumerate(result.boxes):
+            confidence = float(box.conf.item())
+            if confidence < 0.5:
+                continue
+            label = str(result.names[int(box.cls.item())]).lower().replace("-", " ")
+            damage_type = self.label_aliases.get(label)
+            if damage_type is None:
+                continue
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            mask = None
+            if masks is not None:
+                mask = np.asarray(masks[index], dtype=bool)
+                if mask.shape != (rgb.height, rgb.width):
+                    mask = np.asarray(
+                        Image.fromarray(mask).resize(
+                            (rgb.width, rgb.height), Image.Resampling.NEAREST
+                        ),
+                        dtype=bool,
+                    )
+            detections.append(Detection(damage_type, confidence, (float(x1), float(y1), float(x2), float(y2)), rgb.width, rgb.height, mask=mask))
+        return detections
+
+
 def load_detector() -> DamageDetector:
     root = Path(os.getenv("CARITHM_MODEL_DIR", "models"))
+    backend = os.getenv("CARITHM_DETECTOR", "ultralytics").lower()
+    device = os.getenv("CARITHM_DEVICE", "cpu")
+    if backend == "ultralytics":
+        return UltralyticsDamageDetector(Path(os.getenv("CARITHM_YOLO_MODEL", root / "damage-yolo.pt")), device)
+    if backend != "mmdetection":
+        raise DetectorUnavailable("CARITHM_DETECTOR must be 'ultralytics' or 'mmdetection'.")
 
     return MMDetectionDamageDetector(
         root / "dcn_plus_cfg_small.py",
         root / "checkpoint.pth",
-        os.getenv("CARITHM_DEVICE", "cpu"),
+        device,
     )
