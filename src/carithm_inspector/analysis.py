@@ -88,7 +88,6 @@ def _get_horizontal_zone(cx: float) -> str:
     if cx < 0.80: return "Right"
     return "Far Right"
 
-
 def locate_vehicle_part(
     detection: Detection, 
     view_angle: ViewAngle = ViewAngle.UNKNOWN
@@ -101,63 +100,50 @@ def locate_vehicle_part(
     cy = ((y1 + y2) / 2) / detection.image_height
     damage = detection.damage_type
 
+    # 1. Perspective-aware horizontal mapping
+    # If looking from the RIGHT, the right side of the image is the FRONT of the car.
+    # If looking from the LEFT, the left side of the image is the FRONT of the car.
     zone = _get_horizontal_zone(cx)
-    is_left = "Left" in zone
-    is_right = "Right" in zone
+    
+    if view_angle == ViewAngle.RIGHT_SIDE:
+        is_front_zone = "Right" in zone
+        is_rear_zone = "Left" in zone
+    elif view_angle == ViewAngle.LEFT_SIDE:
+        is_front_zone = "Left" in zone
+        is_rear_zone = "Right" in zone
+    else:
+        is_front_zone = "Left" in zone # Default fallback
+        is_rear_zone = "Right" in zone
 
-    # 1. Handle explicit components tied to damage types
+    # 2. Handle explicit components tied to damage types
     if damage == DamageType.TIRE_FLAT:
-        side_modifier = zone.replace("Far ", "")
-        return VehiclePart(f"{side_modifier} Wheel", "Tire and wheel assembly", "Rubber / Alloy")
+        side = "Front" if is_front_zone else "Rear"
+        return VehiclePart(f"{side} Wheel", "Tire and wheel assembly", "Rubber / Alloy")
 
     if damage == DamageType.LAMP_BROKEN:
-        side_modifier = zone.replace("Center ", "").replace("Far ", "")
-        lamp_type = "Headlight" if view_angle == ViewAngle.FRONT or cy < 0.45 else "Tail Light"
-        return VehiclePart(f"{side_modifier} {lamp_type}".strip(), "Lamp assembly", "Polycarbonate")
+        lamp_type = "Headlight" if (view_angle == ViewAngle.FRONT or is_front_zone) else "Tail Light"
+        return VehiclePart(f"{lamp_type}", "Lamp assembly", "Polycarbonate")
 
-    if damage == DamageType.GLASS_SHATTER:
-        if cy < 0.28 or view_angle == ViewAngle.FRONT:
-            return VehiclePart("Windshield", "Front laminated glass", "Glass")
-        if cy > 0.72 or view_angle == ViewAngle.REAR:
-            return VehiclePart("Rear Window", "Rear safety glass", "Glass")
-        side_label = "Left" if cx < 0.5 else "Right"
-        return VehiclePart(f"{side_label} Side Window", "Tempered glass", "Glass")
+    # 3. Vertical Spatial Logic (with Perspective Override)
+    # Check for bumper/fender area first if it's a front/rear zone
+    if cy > 0.40 and (is_front_zone or is_rear_zone):
+        if damage == DamageType.SCRATCH or damage == DamageType.DENT:
+            prefix = "Front" if is_front_zone else "Rear"
+            # If cy is not extremely low (bumper level), prioritize the fender/quarter panel
+            if cy < 0.65:
+                return VehiclePart(f"{prefix} Fender/Quarter Panel", "Steel body panel", "Steel")
+            return VehiclePart(f"{prefix} Bumper", "Plastic bumper cover", "Plastic")
 
-    # 2. Vertical Spatial Tree (General Body Panels)
-    if cy < 0.12:
-        return VehiclePart("Roof", "Roof panel", "Steel")
-
-    if cy < 0.28:
-        hood_label = "Left Hood Edge" if is_left else ("Right Hood Edge" if is_right else "Hood")
-        return VehiclePart(hood_label, "Steel hood panel", "Steel")
-
-    if cy < 0.45:
-        if is_left: return VehiclePart("Left Front Fender", "Steel fender", "Steel")
-        if is_right: return VehiclePart("Right Front Fender", "Steel fender", "Steel")
-        return VehiclePart("Front Grille", "Grille assembly", "Plastic / Composite")
-
-    if cy < 0.70:
-        # Resolve doors safely, acknowledging we might be looking at the right side of the car
-        if view_angle == ViewAngle.RIGHT_SIDE:
-            if zone in ("Far Left", "Left"): return VehiclePart("Right Rear Door", "Steel door panel", "Steel")
-            if zone in ("Far Right", "Right"): return VehiclePart("Right Front Door", "Steel door panel", "Steel")
-        else:  # Default left-facing assumption
-            if zone in ("Far Left", "Left"): return VehiclePart("Left Front Door", "Steel door panel", "Steel")
-            if zone in ("Far Right", "Right"): return VehiclePart("Left Rear Door", "Steel door panel", "Steel")
-        return VehiclePart("Center Pillar", "Body structure", "Steel")
-
-    if cy < 0.86:
-        if is_left: return VehiclePart("Left Rear Quarter Panel", "Steel body panel", "Steel")
-        if is_right: return VehiclePart("Right Rear Quarter Panel", "Steel body panel", "Steel")
-        return VehiclePart("Trunk / Liftgate", "Rear body panel", "Steel")
-
-    # 3. Bottom Layer (Bumpers) - Perspective-Aware
-    is_front = view_angle == ViewAngle.FRONT
-    prefix = "Front" if is_front else "Rear"
+    # Fallback to existing vertical zones for general body work
+    if cy < 0.12: return VehiclePart("Roof", "Roof panel", "Steel")
+    if cy < 0.28: return VehiclePart("Hood / Trunk", "Steel panel", "Steel")
     
-    if is_left: return VehiclePart(f"{prefix} Left Bumper", "Plastic bumper cover", "Plastic")
-    if is_right: return VehiclePart(f"{prefix} Right Bumper", "Plastic bumper cover", "Plastic")
-    return VehiclePart(f"{prefix} Bumper", "Plastic bumper cover", "Plastic")
+    if cy < 0.70:
+        # Resolve doors based on perspective
+        side = "Left" if view_angle == ViewAngle.LEFT_SIDE else "Right"
+        return VehiclePart(f"{side} Door", "Steel door panel", "Steel")
+
+    return VehiclePart("Body Structure", "Chassis component", "Steel")
 
 
 def severity_from_detection(detection: Detection) -> Severity:
