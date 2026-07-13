@@ -1,14 +1,58 @@
+"""
+Carithm AI — Patch for the existing estimates module
+========================================================
+
+This is NOT a new estimation engine — your real one (cost splits,
+severity/confidence multipliers, driveability table, safety notes)
+is correct and unchanged. The ONLY thing this patch touches is the
+single line that resolved `vehicle_part` via the old bbox heuristic:
+
+    vehicle_part=locate_vehicle_part(detection, view_angle)
+
+That becomes a call into the new semantic overlap resolver, with the
+legacy heuristic kept as its automatic fallback (see part_mapping.py).
+Diff against your existing file:
+
+    - from .analysis import (
+    -     locate_vehicle_part,
+    -     priority_from,
+    -     ...
+    - )
+    + from .analysis import (
+    +     priority_from,
+    +     ...
+    + )
+    + from .part_mapping import resolve_vehicle_part
+    + import numpy as np
+    + from numpy.typing import NDArray
+
+    def estimate(
+        detection: Detection,
+        view_angle: ViewAngle,
+    +   part_mask: NDArray[np.int_] | None = None,
+    ) -> Estimate:
+        ...
+    -   vehicle_part=locate_vehicle_part(detection, view_angle),
+    +   vehicle_part=resolve_vehicle_part(detection, part_mask, view_angle).vehicle_part,
+
+`part_mask` defaults to `None`, so every existing call site that
+doesn't pass one keeps working unchanged and silently takes the
+legacy-heuristic path — exactly today's behavior, zero surprises.
+"""
+
 from __future__ import annotations
 
+import numpy as np
+from numpy.typing import NDArray
+
 from .analysis import (
-    locate_vehicle_part,
     priority_from,
     repair_steps_for,
     severity_from_detection,
     shop_time_for,
 )
 from .domain import CostBreakdown, DamageType, Detection, Estimate, Severity, ViewAngle
-
+from .part_mapping import resolve_vehicle_part
 
 # Baselines are consumer repair ranges, before visible-area adjustment.
 _REPAIR_GUIDANCE: dict[DamageType, tuple[int, int, str, bool, str, tuple[str, ...]]] = {
@@ -36,31 +80,40 @@ def _cost_breakdown(damage_type: DamageType, total: int) -> CostBreakdown:
     labour = round(total * labour_pct / 10) * 10
     paint = round(total * paint_pct / 10) * 10
     parts = max(0, total - labour - paint)
-    
-    # Updated to use the new domain.py schema
+
     return CostBreakdown(
-        labour_cost=float(labour), 
-        paint_cost=float(paint), 
+        labour_cost=float(labour),
+        paint_cost=float(paint),
         parts_cost=float(parts),
-        currency="USD"
+        currency="USD",
     )
 
 
-def estimate(detection: Detection, view_angle: ViewAngle) -> Estimate:
-    """Return a detailed repair estimate for one detection, utilizing perspective."""
+def estimate(
+    detection: Detection,
+    view_angle: ViewAngle,
+    part_mask: NDArray[np.int_] | None = None,
+) -> Estimate:
+    """Return a detailed repair estimate for one detection.
+
+    `part_mask` is optional and additive: pass it once a trained
+    PartSegmenter is wired in, and part resolution upgrades from the
+    bbox heuristic to pixel-level semantic overlap automatically. Omit
+    it (or pass None) and behavior is identical to before this patch.
+    """
     low, high, complexity, driveable, note, parts = _REPAIR_GUIDANCE[detection.damage_type]
     severity = severity_from_detection(detection)
-    
+
     area_factor = 0.7 + min(detection.area_ratio / 0.08, 1.0) * 0.5
     confidence_factor = 0.85 + min(max(detection.confidence, 0.0), 1.0) * 0.15
     severity_multiplier = {Severity.MINOR: 0.85, Severity.MODERATE: 1.0, Severity.SEVERE: 1.25}[severity]
-
     low_cost = round(low * area_factor * confidence_factor * severity_multiplier / 10) * 10
     high_cost = round(high * area_factor * confidence_factor * severity_multiplier / 10) * 10
     mid_total = (low_cost + high_cost) // 2
-
     priority = priority_from(detection, severity, driveable)
     shop_low, shop_high = shop_time_for(detection.damage_type, severity)
+
+    resolved = resolve_vehicle_part(detection, part_mask, view_angle)
 
     return Estimate(
         low_cost=float(low_cost),
@@ -71,11 +124,10 @@ def estimate(detection: Detection, view_angle: ViewAngle) -> Estimate:
         parts=parts,
         severity=severity,
         priority=priority,
-        # Pass view_angle here so the heuristic engine can resolve the part location
-        vehicle_part=locate_vehicle_part(detection, view_angle),
+        vehicle_part=resolved.vehicle_part,
         repair_steps=repair_steps_for(detection.damage_type, severity),
         shop_time_low_hours=shop_low,
         shop_time_high_hours=shop_high,
         cost_breakdown=_cost_breakdown(detection.damage_type, int(mid_total)),
-        currency="USD"
+        currency="USD",
     )
